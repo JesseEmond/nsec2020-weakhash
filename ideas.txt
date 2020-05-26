@@ -1,0 +1,88 @@
+# Keyspace
+chars = [chr(c) for c in range(32, 126+1)]
+keyspace = set(ord(c)*2+2 for c in chars)
+95 chars, 8 bytes: 95^8 = 6.6e15 = 52bits
+Can't bruteforce in a CTF.
+
+# Algo
+output = [77 65 61 6B 68 61 73 68]  # encoded 'weakhash'
+for key in chunk(pad(password), 8):
+	output = enc(key, output)
+return output
+
+# Target hashes
+0xDA, 0x99, 0xD1, 0xEA, 0x64, 0x14, 0x4F, 0x3E
+0x59, 0xA3, 0x44, 0x2D, 0x8B, 0xAB, 0xCF, 0x84
+
+# MITM
+This is like 2-DES, in a way. Can ignore smaller keyspace.
+Compute a bunch of E(IV, pw1), with random pw1
+Store in a table:
+t[E(IV,pw1)] = pw1
+
+Compute a bunch of D(target, pw2) with random pw2
+If t[pw2] exists, we got a collision!
+
+This takes a lot of storage, however. 8 bytes (64-bit) per entry.
+I have ~8GB RAM, allows me ~= 2^30 items.
+
+Then bruteforce pw2 for a hit.
+
+If we can somehow store 2^31 items instead, we get 2x as many hashes that can collide.
+Let's see how this impacts the probabilities (computation below):
+2^30: ~1.2 x 10^10 to get 50% chance of collision
+2^31: ~6.0 x 10^9 to get 50% chance of collision
+So we can go twice as fast.
+
+We can do so by using a neat trick:
+define f(counter) to produce a 64-bit key from a 32-bit counter.
+E.g., for DES, we could make it such that it takes the counter and expands each
+7-bit sequence to 8-bits (0 least significant bit, since ignored for DES keys).
+
+Then, we can precompute like this:
+for counter_32 in range(2^31):
+  pw1 = f(counter_32)
+  t[E(IV, pw1) mod 2^31] = counter_32
+
+Which only takes 2^31 * 4 bytes (32-bit) storage.
+
+Then, for finding a collision:
+for counter_64 in range(2^64):
+  pw2 = f(counter_64)  # f is general enough to do this for ints < 2^56
+  res = D(target, pw2)
+  counter_32 = t[res mod 2^31]  # 1/2^33 that this had the same upper bits
+  pw1 = f(counter_32)
+  if E(IV, pw1) == res: print("COLLISION %d %d" % (pw1, pw2))
+
+
+# Collision Probability
+Output space is 2^64
+We have 2^31 known hashes (note that we likely have overlaps in there,
+i.e. less hashes, because of our space optimization, but I'm ignoring that).
+Prob of a random hash colliding is 2^31/2^64, or 1/2^33.
+Prob of not finding a collision after n attempts is:
+p(no collision) = ((2^33 - 1)/2^33)^n
+= (2^33 - 1)^n / 2^(33n)
+p(collision) = 1 - p(no collision)
+= 1 - (2^33 - 1)^n / 2^(33n)
+
+If we plug that in wolfram alpha, solve for n for p(collision)=0.5,
+we get n ~= 5.95 x 10^9
+
+
+# Password
+Code finds:
+Encrypting (encoded) 'weakhash' with key 5e0414f206000000
+then decrypting with key a89020a200000000 gives da99d1ea64144f3e
+Found under 250,000,000 attempts, or 2.5 x 10^8
+Based on probabilities above, this would have prob 2.9% of happening... hmm...
+Perhaps we got lucky, or my prob calculation is wrong, or the challenge was
+designed with a password that makes this easy? ... Not sure.
+
+Undo encoding:
+5e0414f206000000: 2e010978027f7f7f
+a89020a200000000: 53470f507f7f7f7f
+
+password: %2e%01%09%78%02%7f%7f%7f%53%47%0f%50%7f%7f%7f%7f
+
+And it works!
